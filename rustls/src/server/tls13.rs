@@ -385,9 +385,10 @@ mod client_hello {
                 &self.config,
             )?;
             
+            trace!("Server Context common client: {:?}, server: {:?}, client random: {:?}, server random: {:?}", cx.common.client_attest, cx.common.server_attest, cx.common.client_evidence_random, cx.common.server_evidence_random);
 
             let doing_client_auth = if full_handshake {
-                let client_auth = emit_certificate_req_tls13(&mut flight, &self.config)?;
+                let client_auth = emit_certificate_req_tls13(&mut flight, &self.config, cx)?;
 
                 if let Some(compressor) = cert_compressor {
                     emit_compressed_certificate_tls13(
@@ -709,9 +710,11 @@ mod client_hello {
         Ok(early_data)
     }
 
+    // TODO: change certificate generation based on ServerContext
     fn emit_certificate_req_tls13(
         flight: &mut HandshakeFlightTls13<'_>,
         config: &ServerConfig,
+        _cx: &mut ServerContext<'_>,
     ) -> Result<bool, Error> {
         if !config.verifier.offer_client_auth() {
             return Ok(false);

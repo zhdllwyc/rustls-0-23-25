@@ -484,6 +484,8 @@ fn validate_server_attestation_extension(extra_exts: &Vec<ExtensionType>,
 
             if let Some(random) = server_evidence_random {
                 trace!("Server EvidenceRandom exists {:#?}", random);
+                cx.common.client_attest = true;
+                cx.common.server_evidence_random = *random;
             } else {
                 debug!("Server EvidenceRandom Missing, this shouldn't happen");
                 return Err(cx
@@ -513,7 +515,10 @@ fn validate_server_attestation_extension(extra_exts: &Vec<ExtensionType>,
             return Err(cx
                 .common
                 .missing_extension(PeerMisbehaved::ServerMissingEvidenceRequest));
-        } 
+        }else{
+            trace!("Server EvidenceRequests Exists");
+            cx.common.server_attest = true;
+        }
     }
 
     Ok(())
@@ -925,6 +930,9 @@ impl State<ClientConnectionData> for ExpectCertificateRequest {
     where
         Self: 'm,
     {
+        trace!("Client Context common client: {:?}, server: {:?}, client random: {:?}, server random: {:?}", cx.common.client_attest, cx.common.server_attest, cx.common.client_evidence_random, cx.common.server_evidence_random);
+
+        // TODO: handle client authentication based on context
         let certreq = &require_handshake_msg!(
             m,
             HandshakeType::CertificateRequest,

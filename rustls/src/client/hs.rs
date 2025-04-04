@@ -186,6 +186,8 @@ pub(super) fn start_handshake(
         trace!("Client EvidenceRequests exist");
         let evidence_nonce = Random::new(config.provider.secure_random)?;
         extra_exts.push(ClientExtension::EvidenceRandom(evidence_nonce));
+        cx.common.client_evidence_random = evidence_nonce;
+
     }  
 
     trace!("Extra Extension in ClientHello {:#?}", extra_exts);

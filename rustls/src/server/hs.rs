@@ -244,6 +244,10 @@ impl ExtensionProcessing {
                 trace!("Client EvidenceProposal exists");
                 let evidence_nonce = Random::new(config.provider.secure_random)?;
                 extra_exts.push(ServerExtension::EvidenceRandom(evidence_nonce));
+
+                // Update ServerContext
+                cx.common.client_attest = true;
+                cx.common.server_evidence_random = evidence_nonce;
             }
         } 
 
@@ -280,6 +284,9 @@ impl ExtensionProcessing {
 
                 if let Some(random) = client_evidence_random {
                     trace!("Client EvidenceRandom exists {:#?}", random);
+                    // Update ServerContext
+                    cx.common.server_attest = true;
+                    cx.common.client_evidence_random = *random;
                 } else {
                     debug!("Client EvidenceRandom Missing, this shouldn't happen");
                     return Err(cx
