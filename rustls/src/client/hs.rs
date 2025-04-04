@@ -27,8 +27,9 @@ use crate::hash_hs::HandshakeHashBuffer;
 use crate::log::{debug, trace};
 use crate::msgs::base::Payload;
 use crate::msgs::enums::{
-    CertificateType, Compression, ECPointFormat, ExtensionType, PSKKeyExchangeMode,
+    CertificateType, Compression, ECPointFormat, ExtensionType, PSKKeyExchangeMode, EvidenceRequest,
 };
+
 use crate::msgs::handshake::{
     CertificateStatusRequest, ClientExtension, ClientHelloPayload, ClientSessionTicket,
     ConvertProtocolNameList, HandshakeMessagePayload, HandshakePayload, HasServerExtensions,
@@ -171,6 +172,23 @@ pub(super) fn start_handshake(
         )?),
         _ => None,
     };
+
+    // If extra_exts contains an EvidenceRequest, then sample a nonce for this the server to generate an evidence
+    let mut extra_exts = extra_exts.clone();
+
+    if extra_exts.iter().any(|ext| {
+        if let ClientExtension::EvidenceRequests(requests) = ext {
+            requests == &[EvidenceRequest::AWSAttestation]
+        } else {
+            false
+        }
+    }) {
+        trace!("Client EvidenceRequests exist");
+        let evidence_nonce = Random::new(config.provider.secure_random)?;
+        extra_exts.push(ClientExtension::EvidenceRandom(evidence_nonce));
+    }  
+
+    trace!("Extra Extension in ClientHello {:#?}", extra_exts);
 
     emit_client_hello_for_retry(
         transcript_buffer,
@@ -490,7 +508,7 @@ fn emit_client_hello_for_retry(
         }
         _ => {}
     }
-
+    
     // Note what extensions we sent.
     input.hello.sent_extensions = chp_payload
         .extensions
@@ -544,7 +562,7 @@ fn emit_client_hello_for_retry(
         tls13::emit_fake_ccs(&mut input.sent_tls13_fake_ccs, cx.common);
     }
 
-    trace!("Sending ClientHello {:#?}", ch);
+    trace!("Sending ClientHello Meow! {:#?}", ch);
 
     transcript_buffer.add_message(&ch);
     cx.common.send_msg(ch, false);
@@ -744,7 +762,6 @@ impl State<ClientConnectionData> for ExpectServerHello {
         let server_hello =
             require_handshake_msg!(m, HandshakeType::ServerHello, HandshakePayload::ServerHello)?;
         trace!("We got ServerHello {:#?}", server_hello);
-
         use crate::ProtocolVersion::{TLSv1_2, TLSv1_3};
         let config = &self.input.config;
         let tls13_supported = config.supports_version(TLSv1_3);

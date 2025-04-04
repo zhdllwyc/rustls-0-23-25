@@ -5,6 +5,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Deref;
 use core::{fmt, iter};
+use std::str::FromStr;
+use std::format;
 
 use pki_types::{CertificateDer, DnsName};
 
@@ -24,7 +26,7 @@ use crate::msgs::codec::{self, Codec, LengthPrefixedBuffer, ListLength, Reader, 
 use crate::msgs::enums::{
     CertificateStatusType, CertificateType, ClientCertificateType, Compression, ECCurveType,
     ECPointFormat, EchVersion, ExtensionType, HpkeAead, HpkeKdf, HpkeKem, KeyUpdateRequest,
-    NamedGroup, PSKKeyExchangeMode, ServerNameType,
+    NamedGroup, PSKKeyExchangeMode, ServerNameType, EvidenceProposal, EvidenceRequest,
 };
 use crate::rand;
 use crate::sync::Arc;
@@ -548,6 +550,15 @@ impl TlsListElement for CertificateCompressionAlgorithm {
     const SIZE_LEN: ListLength = ListLength::U8;
 }
 
+impl TlsListElement for EvidenceProposal {
+    const SIZE_LEN: ListLength = ListLength::U8;
+}
+
+impl TlsListElement for EvidenceRequest {
+    const SIZE_LEN: ListLength = ListLength::U8;
+}
+
+
 #[derive(Clone, Debug)]
 pub enum ClientExtension {
     EcPointFormats(Vec<ECPointFormat>),
@@ -569,6 +580,10 @@ pub enum ClientExtension {
     TransportParametersDraft(Vec<u8>),
     EarlyData,
     CertificateCompressionAlgorithms(Vec<CertificateCompressionAlgorithm>),
+    // Extra extension for attested TLS
+    EvidenceProposals(Vec<EvidenceProposal>),
+    EvidenceRequests(Vec<EvidenceRequest>),
+    EvidenceRandom(Random),
     EncryptedClientHello(EncryptedClientHello),
     EncryptedClientHelloOuterExtensions(Vec<ExtensionType>),
     AuthorityNames(Vec<DistinguishedName>),
@@ -597,6 +612,9 @@ impl ClientExtension {
             Self::TransportParametersDraft(_) => ExtensionType::TransportParametersDraft,
             Self::EarlyData => ExtensionType::EarlyData,
             Self::CertificateCompressionAlgorithms(_) => ExtensionType::CompressCertificate,
+            Self::EvidenceProposals(_) => ExtensionType::EvidenceProposals,
+            Self::EvidenceRequests(_) => ExtensionType::EvidenceRequests,
+            Self::EvidenceRandom(_) => ExtensionType::EvidenceRandom,
             Self::EncryptedClientHello(_) => ExtensionType::EncryptedClientHello,
             Self::EncryptedClientHelloOuterExtensions(_) => {
                 ExtensionType::EncryptedClientHelloOuterExtensions
@@ -619,7 +637,7 @@ impl Codec<'_> for ClientExtension {
             Self::ServerName(r) => r.encode(nested.buf),
             Self::SessionTicket(ClientSessionTicket::Request)
             | Self::ExtendedMasterSecretRequest
-            | Self::EarlyData => {}
+            | Self::EarlyData  => {}
             Self::SessionTicket(ClientSessionTicket::Offer(r)) => r.encode(nested.buf),
             Self::Protocols(r) => r.encode(nested.buf),
             Self::SupportedVersions(r) => r.encode(nested.buf),
@@ -634,6 +652,9 @@ impl Codec<'_> for ClientExtension {
                 nested.buf.extend_from_slice(r);
             }
             Self::CertificateCompressionAlgorithms(r) => r.encode(nested.buf),
+            Self::EvidenceProposals(r) => r.encode(nested.buf),
+            Self::EvidenceRequests(r) => r.encode(nested.buf),
+            Self::EvidenceRandom(r) => r.encode(nested.buf),
             Self::EncryptedClientHello(r) => r.encode(nested.buf),
             Self::EncryptedClientHelloOuterExtensions(r) => r.encode(nested.buf),
             Self::AuthorityNames(r) => r.encode(nested.buf),
@@ -679,6 +700,9 @@ impl Codec<'_> for ClientExtension {
                 Self::TransportParametersDraft(sub.rest().to_vec())
             }
             ExtensionType::EarlyData if !sub.any_left() => Self::EarlyData,
+            ExtensionType::EvidenceProposals  => Self::EvidenceProposals(Vec::read(&mut sub)?),
+            ExtensionType::EvidenceRequests  => Self::EvidenceRequests(Vec::read(&mut sub)?),
+            ExtensionType::EvidenceRandom  => Self::EvidenceRandom(Random::read(&mut sub)?),
             ExtensionType::CompressCertificate => {
                 Self::CertificateCompressionAlgorithms(Vec::read(&mut sub)?)
             }
@@ -743,6 +767,9 @@ pub enum ServerExtension {
     SupportedVersions(ProtocolVersion),
     TransportParameters(Vec<u8>),
     TransportParametersDraft(Vec<u8>),
+    EvidenceProposals(Vec<EvidenceProposal>),
+    EvidenceRequests(Vec<EvidenceRequest>),
+    EvidenceRandom(Random),
     EarlyData,
     EncryptedClientHello(ServerEncryptedClientHello),
     Unknown(UnknownExtension),
@@ -765,6 +792,9 @@ impl ServerExtension {
             Self::SupportedVersions(_) => ExtensionType::SupportedVersions,
             Self::TransportParameters(_) => ExtensionType::TransportParameters,
             Self::TransportParametersDraft(_) => ExtensionType::TransportParametersDraft,
+            Self::EvidenceProposals(_) => ExtensionType::EvidenceProposals,
+            Self::EvidenceRequests(_) => ExtensionType::EvidenceRequests,
+            Self::EvidenceRandom(_) => ExtensionType::EvidenceRandom,
             Self::EarlyData => ExtensionType::EarlyData,
             Self::EncryptedClientHello(_) => ExtensionType::EncryptedClientHello,
             Self::Unknown(r) => r.typ,
@@ -794,6 +824,9 @@ impl Codec<'_> for ServerExtension {
             Self::TransportParameters(r) | Self::TransportParametersDraft(r) => {
                 nested.buf.extend_from_slice(r);
             }
+            Self::EvidenceProposals(r) => r.encode(nested.buf),
+            Self::EvidenceRequests(r) => r.encode(nested.buf),
+            Self::EvidenceRandom(r) => r.encode(nested.buf),
             Self::EncryptedClientHello(r) => r.encode(nested.buf),
             Self::Unknown(r) => r.encode(nested.buf),
         }
@@ -828,6 +861,9 @@ impl Codec<'_> for ServerExtension {
                 Self::TransportParametersDraft(sub.rest().to_vec())
             }
             ExtensionType::EarlyData => Self::EarlyData,
+            ExtensionType::EvidenceProposals  => Self::EvidenceProposals(Vec::read(&mut sub)?),
+            ExtensionType::EvidenceRequests  => Self::EvidenceRequests(Vec::read(&mut sub)?),
+            ExtensionType::EvidenceRandom  => Self::EvidenceRandom(Random::read(&mut sub)?),
             ExtensionType::EncryptedClientHello => {
                 Self::EncryptedClientHello(ServerEncryptedClientHello::read(&mut sub)?)
             }
@@ -3205,6 +3241,31 @@ mod tests {
             maximum_name_length: 0,
             public_name: DnsName::try_from("example.com").unwrap(),
             extensions: vec![],
+        }
+    }
+}
+
+
+
+/// Represents the attestation mode
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AttestationMode {
+    Disabled,
+    Request,
+    Proposal,
+    RequestProposal,
+}
+
+impl FromStr for AttestationMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "disabled" => Ok(AttestationMode::Disabled),
+            "request" => Ok(AttestationMode::Request),
+            "proposal" => Ok(AttestationMode::Proposal),
+            "mutual" => Ok(AttestationMode::RequestProposal),
+            _ => Err(format!("Invalid attestation mode: {}", s)),
         }
     }
 }

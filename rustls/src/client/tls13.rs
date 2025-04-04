@@ -25,13 +25,14 @@ use crate::log::{debug, trace, warn};
 use crate::msgs::base::{Payload, PayloadU8};
 use crate::msgs::ccs::ChangeCipherSpecPayload;
 use crate::msgs::codec::{Codec, Reader};
-use crate::msgs::enums::{ExtensionType, KeyUpdateRequest};
+use crate::msgs::enums::{ExtensionType, KeyUpdateRequest, EvidenceProposal, EvidenceRequest,};
 use crate::msgs::handshake::{
     CERTIFICATE_MAX_SIZE_LIMIT, CertificatePayloadTls13, ClientExtension, EchConfigPayload,
     HandshakeMessagePayload, HandshakePayload, HasServerExtensions, KeyShareEntry,
     NewSessionTicketPayloadTls13, PresharedKeyIdentity, PresharedKeyOffer, ServerExtension,
     ServerHelloPayload,
 };
+
 use crate::msgs::message::{Message, MessagePayload};
 use crate::msgs::persist;
 use crate::sign::{CertifiedKey, Signer};
@@ -422,7 +423,8 @@ fn validate_encrypted_extensions(
         ));
     }
 
-    if hello.server_sent_unsolicited_extensions(exts, &[]) {
+    // Add EvidenceRandom to the white list
+    if hello.server_sent_unsolicited_extensions(exts, &[ExtensionType::EvidenceRandom]) {
         return Err(common.send_fatal_alert(
             AlertDescription::UnsupportedExtension,
             PeerMisbehaved::UnsolicitedEncryptedExtension,
@@ -438,6 +440,80 @@ fn validate_encrypted_extensions(
                 PeerMisbehaved::DisallowedEncryptedExtension,
             ));
         }
+    }
+
+    Ok(())
+}
+
+fn validate_server_attestation_extension(extra_exts: &Vec<ExtensionType>,
+    hello: &Vec<ServerExtension>,
+    cx: &mut ClientContext<'_>,
+) -> Result<(), Error> {
+
+
+    // If client has proposal (it is in an enclave), 
+    if extra_exts.iter().any(|ext| {
+        if let ExtensionType::EvidenceProposals = ext {
+            true
+        } else {
+            false
+        }
+    }) {
+        trace!("Client EvidenceProposal exists");
+        if !hello.iter().any(|ext|{ // Error if server does not send proposal
+            if let ServerExtension::EvidenceProposals(proposal_server) = ext {
+                proposal_server == &[EvidenceProposal::AWSAttestation]
+            } else {
+                false
+            }
+        }){
+            debug!("Server EvidenceProposal Missing");
+            return Err(cx
+                .common
+                .missing_extension(PeerMisbehaved::ServerMissingEvidenceProposal));
+        } else{ // Serever sends proposal, client generates evidence using server randomness
+            trace!("Server EvidenceProposal exists");
+            // Get server randomness
+            let server_evidence_random = hello.iter().find_map(|ext| {
+                if let ServerExtension::EvidenceRandom(random) = ext {
+                    Some(random) 
+                } else {
+                    None
+                }
+            });
+
+            if let Some(random) = server_evidence_random {
+                trace!("Server EvidenceRandom exists {:#?}", random);
+            } else {
+                debug!("Server EvidenceRandom Missing, this shouldn't happen");
+                return Err(cx
+                    .common
+                    .missing_extension(PeerMisbehaved::ServerMissingEvidenceRandom));
+                }
+        }
+    } 
+
+    // If client has request (it requires server to provide evidence),
+    if extra_exts.iter().any(|ext| {
+        if let ExtensionType::EvidenceRequests = ext {
+            true
+        } else {
+            false
+        }
+    }) {
+        trace!("Client EvidenceRequests exists");
+        if !hello.iter().any(|ext|{ // Error if server does not send request
+            if let ServerExtension::EvidenceRequests(request_server) = ext {
+                request_server == &[EvidenceRequest::AWSAttestation]
+            } else {
+                false
+            }
+        }){
+            debug!("Server EvidenceRequests Missing");
+            return Err(cx
+                .common
+                .missing_extension(PeerMisbehaved::ServerMissingEvidenceRequest));
+        } 
     }
 
     Ok(())
@@ -472,6 +548,8 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
         self.transcript.add_message(&m);
 
         validate_encrypted_extensions(cx.common, &self.hello, exts)?;
+        validate_server_attestation_extension(&self.hello.sent_extensions, exts, cx)?;
+
         hs::process_alpn_protocol(cx.common, &self.config, exts.alpn_protocol())?;
         hs::process_client_cert_type_extension(cx.common, &self.config, exts.client_cert_type())?;
         hs::process_server_cert_type_extension(cx.common, &self.config, exts.server_cert_type())?;
@@ -582,6 +660,7 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
     fn into_owned(self: Box<Self>) -> hs::NextState<'static> {
         self
     }
+    
 }
 
 struct ExpectCertificateOrCompressedCertificateOrCertReq {

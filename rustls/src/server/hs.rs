@@ -1,7 +1,6 @@
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-
 use pki_types::DnsName;
 
 use super::server_conn::ServerConnectionData;
@@ -17,12 +16,12 @@ use crate::enums::{
 use crate::error::{Error, PeerIncompatible, PeerMisbehaved};
 use crate::hash_hs::{HandshakeHash, HandshakeHashBuffer};
 use crate::log::{debug, trace};
-use crate::msgs::enums::{CertificateType, Compression, ExtensionType, NamedGroup};
+use crate::msgs::enums::{CertificateType, Compression, ExtensionType, NamedGroup, EvidenceProposal, EvidenceRequest,};
 #[cfg(feature = "tls12")]
 use crate::msgs::handshake::SessionId;
 use crate::msgs::handshake::{
     ClientHelloPayload, ConvertProtocolNameList, ConvertServerNameList, HandshakePayload,
-    KeyExchangeAlgorithm, Random, ServerExtension,
+    KeyExchangeAlgorithm, Random, ServerExtension,ClientExtension
 };
 use crate::msgs::message::{Message, MessagePayload};
 use crate::msgs::persist;
@@ -75,6 +74,10 @@ impl ExtensionProcessing {
         resumedata: Option<&persist::ServerSessionValue>,
         extra_exts: Vec<ServerExtension>,
     ) -> Result<(), Error> {
+        trace!("Client hello extensions are: {:?}", hello.extensions);
+
+        trace!("Server extensions are: {:?}", extra_exts);
+
         // ALPN
         let our_protocols = &config.alpn_protocols;
         let maybe_their_protocols = hello.alpn_extension();
@@ -159,6 +162,10 @@ impl ExtensionProcessing {
         self.validate_server_cert_type_extension(hello, config, cx)?;
         self.validate_client_cert_type_extension(hello, config, cx)?;
 
+
+        // Check Client Attestation extensions Against Server's
+        let extra_exts = Self::validate_client_attestation_extension(extra_exts, hello, config, cx)?;
+
         self.exts.extend(extra_exts);
 
         Ok(())
@@ -203,6 +210,85 @@ impl ExtensionProcessing {
             self.exts
                 .push(ServerExtension::ExtendedMasterSecretAck);
         }
+    }
+
+    fn validate_client_attestation_extension(extra_exts: Vec<ServerExtension>,
+        hello: &ClientHelloPayload,
+        config: &ServerConfig,
+        cx: &mut ServerContext<'_>,
+    ) -> Result<Vec<ServerExtension>, Error> {
+
+        let mut extra_exts = extra_exts.clone();
+
+        // If server has proposal (it requires client to provide evidence), 
+        if extra_exts.iter().any(|ext| {
+            if let ServerExtension::EvidenceProposals(proposal) = ext {
+                proposal == &[EvidenceProposal::AWSAttestation]
+            } else {
+                false
+            }
+        }) {
+            trace!("Server EvidenceProposal exists");
+            if !hello.extensions.iter().any(|ext|{ // Error if cilent does not send proposal
+                if let ClientExtension::EvidenceProposals(proposal_client) = ext {
+                    proposal_client == &[EvidenceProposal::AWSAttestation]
+                } else {
+                    false
+                }
+            }){
+                debug!("Client EvidenceProposal Missing");
+                return Err(cx
+                    .common
+                    .missing_extension(PeerMisbehaved::ClientMissingEvidenceProposal));
+            } else{ // Sample a random if the client has sent a proposal, this random is for client to generate evidence
+                trace!("Client EvidenceProposal exists");
+                let evidence_nonce = Random::new(config.provider.secure_random)?;
+                extra_exts.push(ServerExtension::EvidenceRandom(evidence_nonce));
+            }
+        } 
+
+        // If server has request (it is in an enclave),
+        if extra_exts.iter().any(|ext| {
+            if let ServerExtension::EvidenceRequests(requests) = ext {
+                requests == &[EvidenceRequest::AWSAttestation]
+            } else {
+                false
+            }
+        }) {
+            trace!("Server EvidenceRequests exists");
+            if !hello.extensions.iter().any(|ext|{ // Error if cilent does not send request
+                if let ClientExtension::EvidenceRequests(requests) = ext {
+                    requests == &[EvidenceRequest::AWSAttestation]
+                } else {
+                    false
+                }
+            }){
+                debug!("Client EvidenceRequest Missing");
+                return Err(cx
+                    .common
+                    .missing_extension(PeerMisbehaved::ClientMissingEvidenceRequest));
+            } else{ // Client sends request, server generates evidence using client randomness
+                trace!("Client EvidenceRequest exists");
+                // Get client randomness
+                let client_evidence_random = hello.extensions.iter().find_map(|ext| {
+                    if let ClientExtension::EvidenceRandom(random) = ext {
+                        Some(random) 
+                    } else {
+                        None
+                    }
+                });
+
+                if let Some(random) = client_evidence_random {
+                    trace!("Client EvidenceRandom exists {:#?}", random);
+                } else {
+                    debug!("Client EvidenceRandom Missing, this shouldn't happen");
+                    return Err(cx
+                        .common
+                        .missing_extension(PeerMisbehaved::ClientMissingEvidenceRandom));
+                    }
+            }
+        } 
+        Ok(extra_exts)
     }
 
     fn validate_server_cert_type_extension(
@@ -401,6 +487,8 @@ impl ExpectClientHello {
 
         sig_schemes
             .retain(|scheme| suites::compatible_sigscheme_for_suites(*scheme, &client_suites));
+
+        // TODO: CHANGE HERE based on the extra extension: EvidenceProposal, EvidenceRequest
 
         // We adhere to the TLS 1.2 RFC by not exposing this to the cert resolver if TLS version is 1.2
         let certificate_authorities = match version {

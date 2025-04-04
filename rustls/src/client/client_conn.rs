@@ -627,21 +627,25 @@ impl EarlyData {
 #[cfg(feature = "std")]
 mod connection {
     use alloc::vec::Vec;
+    use std::vec;
     use core::fmt;
     use core::ops::{Deref, DerefMut};
     use std::io;
 
     use pki_types::ServerName;
-
+    use crate::msgs::handshake::AttestationMode;
     use super::ClientConnectionData;
     use crate::ClientConfig;
     use crate::client::EchStatus;
     use crate::common_state::Protocol;
     use crate::conn::{ConnectionCommon, ConnectionCore};
+    use crate::msgs::handshake::ClientExtension;
+    use crate::msgs::enums::{EvidenceProposal,EvidenceRequest};
+
     use crate::error::Error;
     use crate::suites::ExtractedSecrets;
     use crate::sync::Arc;
-
+    
     /// Stub that implements io::Write and dispatches to `write_early_data`.
     pub struct WriteEarlyData<'a> {
         sess: &'a mut ClientConnection,
@@ -701,9 +705,21 @@ mod connection {
         /// Make a new ClientConnection.  `config` controls how
         /// we behave in the TLS protocol, `name` is the
         /// name of the server we want to talk to.
-        pub fn new(config: Arc<ClientConfig>, name: ServerName<'static>) -> Result<Self, Error> {
+        pub fn new(config: Arc<ClientConfig>, name: ServerName<'static>, attested: AttestationMode) -> Result<Self, Error> {
+            let mut extra_exts: Vec<ClientExtension> = Vec::new();
+
+            // server requests client to provide evidence, this have to be added into encrypted extension
+            if attested == AttestationMode::Request {
+                extra_exts.push(ClientExtension::EvidenceRequests(vec![EvidenceRequest::AWSAttestation]));
+            } else if attested == AttestationMode::Proposal {
+                extra_exts.push(ClientExtension::EvidenceProposals(vec![EvidenceProposal::AWSAttestation]));
+            } else if attested == AttestationMode::RequestProposal {
+                extra_exts.push(ClientExtension::EvidenceProposals(vec![EvidenceProposal::AWSAttestation]));
+                extra_exts.push(ClientExtension::EvidenceRequests(vec![EvidenceRequest::AWSAttestation]));
+            }
+
             Ok(Self {
-                inner: ConnectionCore::for_client(config, name, Vec::new(), Protocol::Tcp)?.into(),
+                inner: ConnectionCore::for_client(config, name, /*Vec::new()*/ extra_exts, Protocol::Tcp)?.into(),
             })
         }
 

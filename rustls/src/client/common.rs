@@ -58,7 +58,7 @@ impl ClientHelloDetails {
             let ext_type = ext.ext_type();
             if !self.sent_extensions.contains(&ext_type) && !allowed_unsolicited.contains(&ext_type)
             {
-                trace!("Unsolicited extension {:?}", ext_type);
+                trace!("Unsolicited extension {:?}, {:?}", self.sent_extensions.contains(&ext_type), ext_type);
                 return true;
             }
         }

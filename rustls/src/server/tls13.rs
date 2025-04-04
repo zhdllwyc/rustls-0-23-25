@@ -36,6 +36,18 @@ use crate::tls13::{
 };
 use crate::{compress, rand, verify};
 
+
+// How handshakes are being encrypted:
+// encrypted extension is added to flight: flight.add(ee);
+// certificate request: flight.add(creq);
+// certificate: flight.add(cert);
+// compressed certificate: flight.add(c);
+// certificate verify: flight.add(cert_verify);
+// finished: flight.add(finished);
+// Then, flight.finish(cx.common) calls rustls::common_state::HandshakeFlight<true>::finish<true> in src/common_state.rs
+// finish calls common.send_msg which -> send_msg_encrypt -> encrypt_outgoing in the record layer (src/record_layer.rs)
+// The data to be encrypted is flight.body which is what has been added to the flight.
+
 mod client_hello {
     use super::*;
     use crate::compress::CertCompressor;
@@ -140,6 +152,8 @@ mod client_hello {
             selected_kxg: &'static dyn SupportedKxGroup,
             mut sigschemes_ext: Vec<SignatureScheme>,
         ) -> hs::NextStateOrError<'static> {
+            trace!("Handle clienthello for tls 1.3");
+
             if client_hello.compression_methods.len() != 1 {
                 return Err(cx.common.send_fatal_alert(
                     AlertDescription::IllegalParameter,
@@ -370,6 +384,7 @@ mod client_hello {
                 self.extra_exts,
                 &self.config,
             )?;
+            
 
             let doing_client_auth = if full_handshake {
                 let client_auth = emit_certificate_req_tls13(&mut flight, &self.config)?;
@@ -423,7 +438,7 @@ mod client_hello {
             cx.common.check_aligned_handshake()?;
             let key_schedule_traffic =
                 emit_finished_tls13(flight, &self.randoms, cx, key_schedule, &self.config);
-
+            
             if !doing_client_auth && self.config.send_half_rtt_data {
                 // Application data can be sent immediately after Finished, in one
                 // flight.  However, if client auth is enabled, we don't want to send
@@ -746,6 +761,9 @@ mod client_hello {
         cert_chain: &[CertificateDer<'static>],
         ocsp_response: Option<&[u8]>,
     ) {
+        
+        trace!("The outgoing server encrypted extension {:?}", flight.ee);
+        
         let cert = HandshakeMessagePayload {
             typ: HandshakeType::Certificate,
             payload: HandshakePayload::CertificateTls13(CertificatePayloadTls13::new(
@@ -753,7 +771,7 @@ mod client_hello {
                 ocsp_response,
             )),
         };
-
+        
         trace!("sending certificate {:?}", cert);
         flight.add(cert);
     }

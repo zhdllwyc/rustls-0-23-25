@@ -108,6 +108,7 @@ impl RecordLayer {
         &mut self,
         plain: OutboundPlainMessage<'_>,
     ) -> OutboundOpaqueMessage {
+        
         debug_assert!(self.encrypt_state == DirectionState::Active);
         assert!(self.next_pre_encrypt_action() != PreEncryptAction::Refuse);
         let seq = self.write_seq;

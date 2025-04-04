@@ -561,14 +561,18 @@ impl ServerConfig {
 mod connection {
     use alloc::boxed::Box;
     use alloc::vec::Vec;
+    use std::vec;
     use core::fmt;
     use core::fmt::{Debug, Formatter};
     use core::ops::{Deref, DerefMut};
     use std::io;
-
+    use crate::msgs::handshake::ServerExtension;
+    use crate::msgs::enums::{EvidenceRequest,EvidenceProposal};
+    use crate::msgs::handshake::AttestationMode;
     use super::{Accepted, Accepting, EarlyDataState, ServerConfig, ServerConnectionData};
     use crate::common_state::{CommonState, Context, Side};
     use crate::conn::{ConnectionCommon, ConnectionCore};
+
     use crate::error::Error;
     use crate::server::hs;
     use crate::suites::ExtractedSecrets;
@@ -612,9 +616,22 @@ mod connection {
     impl ServerConnection {
         /// Make a new ServerConnection.  `config` controls how
         /// we behave in the TLS protocol.
-        pub fn new(config: Arc<ServerConfig>) -> Result<Self, Error> {
+        pub fn new(config: Arc<ServerConfig>, attested: AttestationMode) -> Result<Self, Error> {
+            // Add extension if attested is true
+            let mut extra_exts: Vec<ServerExtension> = Vec::new();
+
+            // server requests client to provide evidence, this have to be added into encrypted extension
+            if attested == AttestationMode::Request {
+                extra_exts.push(ServerExtension::EvidenceRequests(vec![EvidenceRequest::AWSAttestation]));
+            } else if attested == AttestationMode::Proposal {
+                extra_exts.push(ServerExtension::EvidenceProposals(vec![EvidenceProposal::AWSAttestation]));
+            } else if attested == AttestationMode::RequestProposal {
+                extra_exts.push(ServerExtension::EvidenceProposals(vec![EvidenceProposal::AWSAttestation]));
+                extra_exts.push(ServerExtension::EvidenceRequests(vec![EvidenceRequest::AWSAttestation]));
+            }
+
             Ok(Self {
-                inner: ConnectionCommon::from(ConnectionCore::for_server(config, Vec::new())?),
+                inner: ConnectionCommon::from(ConnectionCore::for_server(config, extra_exts)?),
             })
         }
 
