@@ -705,7 +705,6 @@ mod client_hello {
             payload: HandshakePayload::EncryptedExtensions(ep.exts),
         };
 
-        trace!("sending encrypted extensions {:?}", ee);
         flight.add(ee);
         Ok(early_data)
     }
@@ -761,9 +760,7 @@ mod client_hello {
         cert_chain: &[CertificateDer<'static>],
         ocsp_response: Option<&[u8]>,
     ) {
-        
-        trace!("The outgoing server encrypted extension {:?}", flight.ee);
-        
+                
         let cert = HandshakeMessagePayload {
             typ: HandshakeType::Certificate,
             payload: HandshakePayload::CertificateTls13(CertificatePayloadTls13::new(
