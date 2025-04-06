@@ -1,18 +1,33 @@
 Use this file to document modification on top of rustls for attested TLS interfacing AWS Nitro Enclave
 - src
   - client
-    - client_conn
+    - client_conn:
+      - func new: create extra_ext based on AttestationMode
     - common
-    - hs
-    - tls13
+    - hs:
+      - start_handshake: sample random client nonce if client request evidence
+      - hello.server_sent_unsolicited_extensions: add EvidenceRandom to extension whitelist. When client is proprosal, server will send back a EvidenceRandom in its encrypted extension. We need to add EvidenceRandom into extension whitelist beforehand so that client do not throw error when seeing this extension from the server.
+      - add fn validate_server_attestation_extension: validate server encrypted extension based on client AttestationMode: request, proposal, mutual
+      - update clientcontext: client_evidence_random
+    - tls13:
+      - update clientcontext: client_attest, server_attest, server_evidence_random
   - server
-    - server_conn
-    - hs
+    - server_conn:
+      - func new: create extra_ext based on AttestationMode
+    - hs:
+      - add fn validate_client_attestation_extension: validate client extension based on server AttestationMode: request, proposal, mutual
+      - update servercontext
     - tls13
+      - document how server extension is encrypted
+      - modify emit_certificate_req_tls13 to take in server context
   - msgs
-    - enums
-    - handshake
-  - record_layer
-  - error
-  - lib
+    - enums:
+      - add three extension type and give them fake IANA number.
+      - add two extension euum for requesting and proposal evidence type, right now each enum only has two variants: [no, aws], but this enum can be extended in the future. 
+    - handshake:
+      - add extension into client and server extension.
+      - add enum AttestationMode
+  - common_state: add client_attest, server_attest, client_evidence_random, server_evidence_random to struct CommonState. 
+  - error: add six variants to PeerMisbehaved for describing server and client missing extensions. 
+  - lib: expose AttestationMode so that depending rust crate can specify attested TLS mode: disabled, request, proposal, mutual. 
   
